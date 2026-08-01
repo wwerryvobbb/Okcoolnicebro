@@ -455,28 +455,34 @@ jobs:
           if ($env:BACKUP_REMOTE -ne "none" -and $env:BACKUP_REMOTE) {
               Write-Host "Saving active desktop wallpaper..."
               Copy-Item "C:\Users\RDP\AppData\Roaming\Microsoft\Windows\Themes\TranscodedWallpaper" "C:\Users\Public\Desktop\SavedFiles\MyWallpaper.jpg" -Force -ErrorAction SilentlyContinue
+
+              Write-Host "Performing final backup to $($env:BACKUP_REMOTE)..."
+              $UserProfile = "C:\Users\RDP"
               
-              Write-Host "Syncing Mozilla Firefox..."
-              if (Test-Path "C:\Users\RDP\AppData\Roaming\Mozilla") { rclone sync "C:\Users\RDP\AppData\Roaming\Mozilla" "$($env:BACKUP_REMOTE):winrdp-backup/Mozilla" --exclude ".cache/**" -q --config "C:\Users\Public\rclone.conf" }
+              if (Test-Path "$UserProfile\AppData\Roaming\Mozilla") { rclone sync "$UserProfile\AppData\Roaming\Mozilla" "$($env:BACKUP_REMOTE):winrdp-backup/Mozilla" --exclude ".cache/**" -q --drive-chunk-size 128M }
+              if (Test-Path "$UserProfile\AppData\Local\Google\Chrome\User Data") { rclone sync "$UserProfile\AppData\Local\Google\Chrome\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/ChromeUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --drive-chunk-size 128M }
+              if (Test-Path "$UserProfile\AppData\Local\BraveSoftware\Brave-Browser\User Data") { rclone sync "$UserProfile\AppData\Local\BraveSoftware\Brave-Browser\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/BraveUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --drive-chunk-size 128M }
+              if (Test-Path "$UserProfile\AppData\Local\Microsoft\Edge\User Data") { rclone sync "$UserProfile\AppData\Local\Microsoft\Edge\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/EdgeUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --drive-chunk-size 128M }
               
-              Write-Host "Syncing Google Chrome..."
-              if (Test-Path "C:\Users\RDP\AppData\Local\Google\Chrome\User Data") { rclone sync "C:\Users\RDP\AppData\Local\Google\Chrome\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/ChromeUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --config "C:\Users\Public\rclone.conf" }
+              Write-Host "Archiving SavedFiles for fast upload..."
+              $TempZips = "C:\TempZips"
+              if (-not (Test-Path $TempZips)) { New-Item -ItemType Directory -Force -Path $TempZips | Out-Null }
+              if (Test-Path "$TempZips\SavedFiles.zip") { Remove-Item "$TempZips\SavedFiles.zip" -Force }
+              if (Test-Path "C:\Users\Public\Desktop\SavedFiles") { 
+                  7z a -tzip -mx0 -ssw "$TempZips\SavedFiles.zip" "C:\Users\Public\Desktop\SavedFiles\*" | Out-Null 
+                  rclone copy "$TempZips\SavedFiles.zip" "$($env:BACKUP_REMOTE):winrdp-backup/" -q --drive-chunk-size 128M
+              }
               
-              Write-Host "Syncing Brave Browser..."
-              if (Test-Path "C:\Users\RDP\AppData\Local\BraveSoftware\Brave-Browser\User Data") { rclone sync "C:\Users\RDP\AppData\Local\BraveSoftware\Brave-Browser\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/BraveUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --config "C:\Users\Public\rclone.conf" }
-              
-              Write-Host "Syncing Microsoft Edge..."
-              if (Test-Path "C:\Users\RDP\AppData\Local\Microsoft\Edge\User Data") { rclone sync "C:\Users\RDP\AppData\Local\Microsoft\Edge\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/EdgeUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --config "C:\Users\Public\rclone.conf" }
-              
-              Write-Host "Packaging SavedFiles into an Archive..."
-              if (-not (Test-Path "C:\TempZips")) { New-Item -ItemType Directory -Force -Path "C:\TempZips" | Out-Null }
-              if (Test-Path "C:\TempZips\SavedFiles.zip") { Remove-Item "C:\TempZips\SavedFiles.zip" -Force }
-              7z a -tzip -mx0 -ssw "C:\TempZips\SavedFiles.zip" "C:\Users\Public\Desktop\SavedFiles\*" >$null
-              
-              Write-Host "Syncing SavedFiles Archive..."
-              rclone copy "C:\TempZips\SavedFiles.zip" "$($env:BACKUP_REMOTE):winrdp-backup/" -q --config "C:\Users\Public\rclone.conf"
-              
-              Write-Host "Final Backup Complete!"
+              Write-Host "Final backup complete."
           } else {
               Write-Host "No backup remote configured. Skipping final backup."
           }
+
+      - name: 🔄 Auto-Restart Server
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Write-Host "Triggering next workflow run to restart the server..."
+          gh workflow run rdp_workflow.yml --repo ${{ github.repository }} --ref ${{ github.ref_name }}
+          Write-Host "✅ Restart triggered successfully!"
