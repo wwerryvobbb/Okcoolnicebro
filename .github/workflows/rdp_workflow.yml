@@ -142,6 +142,78 @@ jobs:
           '@
           $RestartBat | Out-File "C:\Users\Public\Desktop\Instant-Restart.bat" -Encoding ascii
 
+          # --- BOT CONTROL MENU ON DESKTOP ---
+          $BotBatPath = "C:\Users\Public\Desktop\Bot-Control.bat"
+          $BotBatContent = @"
+          @echo off
+          title SuperCR Bot Control Panel
+          :menu
+          cls
+          echo =======================================================
+          echo              SUPERCR.PY BOT MANAGER
+          echo =======================================================
+          echo [1] Stop Bot (Kill active script ^& Chrome)
+          echo [2] Start Bot (Headless / Invisible Browser)
+          echo [3] Start Bot (Visible GUI / Watch Chrome Open)
+          echo [4] Exit Menu
+          echo =======================================================
+          echo.
+          set /p choice="Select an option (1-4): "
+
+          if "%choice%"=="1" goto stop_bot
+          if "%choice%"=="2" goto start_headless
+          if "%choice%"=="3" goto start_gui
+          if "%choice%"=="4" goto end
+          goto menu
+
+          :stop_bot
+          echo.
+          echo Stopping supercr.py and closing Chrome processes...
+          powershell -Command "Get-CimInstance Win32_Process | Where-Object { `$_.CommandLine -like '*supercr.py*' } | Stop-Process -Force" >nul 2>&1
+          taskkill /F /IM chromedriver.exe >nul 2>&1
+          taskkill /F /IM python.exe >nul 2>&1
+          echo [x] Bot stopped successfully.
+          echo.
+          pause
+          goto menu
+
+          :start_headless
+          echo.
+          if not exist "C:\Users\Public\Desktop\SavedFiles\supercr.py" (
+              echo [!] ERROR: supercr.py not found in SavedFiles!
+              echo Please restore your files or add the script.
+              echo.
+              pause
+              goto menu
+          )
+          echo Starting Bot in HEADLESS mode...
+          start "SuperCR Bot (Headless)" cmd /k "python C:\Users\Public\Desktop\SavedFiles\supercr.py --headless"
+          echo [x] Bot launched in background window.
+          echo.
+          pause
+          goto menu
+
+          :start_gui
+          echo.
+          if not exist "C:\Users\Public\Desktop\SavedFiles\supercr.py" (
+              echo [!] ERROR: supercr.py not found in SavedFiles!
+              echo Please restore your files or add the script.
+              echo.
+              pause
+              goto menu
+          )
+          echo Starting Bot in VISIBLE GUI mode...
+          start "SuperCR Bot (Visible)" cmd /k "python C:\Users\Public\Desktop\SavedFiles\supercr.py"
+          echo [x] Bot launched with visible Chrome browser!
+          echo.
+          pause
+          goto menu
+
+          :end
+          exit
+          "@
+          $BotBatContent | Out-File $BotBatPath -Encoding utf8
+
           # 6. Create Auto-Startup Script for RDP User
           Write-Host "Setting up User Startup script (Dark Mode, Wallpaper)..."
           $ScriptPath = "C:\Users\Public\UserStartup.ps1"
@@ -354,6 +426,19 @@ jobs:
           # Start the hidden 330-minute (19800 seconds) timer process
           Start-Process -FilePath "C:\Windows\System32\WorkflowTimer.exe" -ArgumentList "/t 19800 /nobreak" -WindowStyle Hidden
           
+          # --- START THE BOT IN THE BACKGROUND ---
+          $BotPath = "C:\Users\Public\Desktop\SavedFiles\supercr.py"
+          if (Test-Path $BotPath) {
+              Write-Host "Found supercr.py in SavedFiles. Installing dependencies and starting headless bot..."
+              # The Out-Null prevents pip from crashing the workflow if there's a minor error
+              cmd.exe /c "pip install selenium webdriver-manager --quiet" | Out-Null
+              
+              # Runs python in the background without tying up the workflow
+              Start-Process -FilePath "python" -ArgumentList "`"$BotPath`" --headless" -WindowStyle Hidden
+          } else {
+              Write-Host "supercr.py not found in SavedFiles. Skipping automatic bot launch."
+          }
+          
           Write-Host "[$(Get-Date)] RDP Active. Run 'Instant-Restart.bat' on your desktop to trigger backup & restart instantly."
           
           # Put the workflow into a completely zero-CPU hibernation until the anchor dies
@@ -370,34 +455,28 @@ jobs:
           if ($env:BACKUP_REMOTE -ne "none" -and $env:BACKUP_REMOTE) {
               Write-Host "Saving active desktop wallpaper..."
               Copy-Item "C:\Users\RDP\AppData\Roaming\Microsoft\Windows\Themes\TranscodedWallpaper" "C:\Users\Public\Desktop\SavedFiles\MyWallpaper.jpg" -Force -ErrorAction SilentlyContinue
-
-              Write-Host "Performing final backup to $($env:BACKUP_REMOTE)..."
-              $UserProfile = "C:\Users\RDP"
               
-              if (Test-Path "$UserProfile\AppData\Roaming\Mozilla") { rclone sync "$UserProfile\AppData\Roaming\Mozilla" "$($env:BACKUP_REMOTE):winrdp-backup/Mozilla" --exclude ".cache/**" -q --drive-chunk-size 128M }
-              if (Test-Path "$UserProfile\AppData\Local\Google\Chrome\User Data") { rclone sync "$UserProfile\AppData\Local\Google\Chrome\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/ChromeUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --drive-chunk-size 128M }
-              if (Test-Path "$UserProfile\AppData\Local\BraveSoftware\Brave-Browser\User Data") { rclone sync "$UserProfile\AppData\Local\BraveSoftware\Brave-Browser\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/BraveUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --drive-chunk-size 128M }
-              if (Test-Path "$UserProfile\AppData\Local\Microsoft\Edge\User Data") { rclone sync "$UserProfile\AppData\Local\Microsoft\Edge\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/EdgeUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --drive-chunk-size 128M }
+              Write-Host "Syncing Mozilla Firefox..."
+              if (Test-Path "C:\Users\RDP\AppData\Roaming\Mozilla") { rclone sync "C:\Users\RDP\AppData\Roaming\Mozilla" "$($env:BACKUP_REMOTE):winrdp-backup/Mozilla" --exclude ".cache/**" -q --config "C:\Users\Public\rclone.conf" }
               
-              Write-Host "Archiving SavedFiles for fast upload..."
-              $TempZips = "C:\TempZips"
-              if (-not (Test-Path $TempZips)) { New-Item -ItemType Directory -Force -Path $TempZips | Out-Null }
-              if (Test-Path "$TempZips\SavedFiles.zip") { Remove-Item "$TempZips\SavedFiles.zip" -Force }
-              if (Test-Path "C:\Users\Public\Desktop\SavedFiles") { 
-                  7z a -tzip -mx0 -ssw "$TempZips\SavedFiles.zip" "C:\Users\Public\Desktop\SavedFiles\*" | Out-Null 
-                  rclone copy "$TempZips\SavedFiles.zip" "$($env:BACKUP_REMOTE):winrdp-backup/" -q --drive-chunk-size 128M
-              }
+              Write-Host "Syncing Google Chrome..."
+              if (Test-Path "C:\Users\RDP\AppData\Local\Google\Chrome\User Data") { rclone sync "C:\Users\RDP\AppData\Local\Google\Chrome\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/ChromeUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --config "C:\Users\Public\rclone.conf" }
               
-              Write-Host "Final backup complete."
+              Write-Host "Syncing Brave Browser..."
+              if (Test-Path "C:\Users\RDP\AppData\Local\BraveSoftware\Brave-Browser\User Data") { rclone sync "C:\Users\RDP\AppData\Local\BraveSoftware\Brave-Browser\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/BraveUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --config "C:\Users\Public\rclone.conf" }
+              
+              Write-Host "Syncing Microsoft Edge..."
+              if (Test-Path "C:\Users\RDP\AppData\Local\Microsoft\Edge\User Data") { rclone sync "C:\Users\RDP\AppData\Local\Microsoft\Edge\User Data" "$($env:BACKUP_REMOTE):winrdp-backup/EdgeUserData" --exclude "Cache/**" --exclude "Code Cache/**" -q --config "C:\Users\Public\rclone.conf" }
+              
+              Write-Host "Packaging SavedFiles into an Archive..."
+              if (-not (Test-Path "C:\TempZips")) { New-Item -ItemType Directory -Force -Path "C:\TempZips" | Out-Null }
+              if (Test-Path "C:\TempZips\SavedFiles.zip") { Remove-Item "C:\TempZips\SavedFiles.zip" -Force }
+              7z a -tzip -mx0 -ssw "C:\TempZips\SavedFiles.zip" "C:\Users\Public\Desktop\SavedFiles\*" >$null
+              
+              Write-Host "Syncing SavedFiles Archive..."
+              rclone copy "C:\TempZips\SavedFiles.zip" "$($env:BACKUP_REMOTE):winrdp-backup/" -q --config "C:\Users\Public\rclone.conf"
+              
+              Write-Host "Final Backup Complete!"
           } else {
               Write-Host "No backup remote configured. Skipping final backup."
           }
-
-      - name: 🔄 Auto-Restart Server
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          Write-Host "Triggering next workflow run to restart the server..."
-          gh workflow run rdp_workflow.yml --repo ${{ github.repository }} --ref ${{ github.ref_name }}
-          Write-Host "✅ Restart triggered successfully!"
